@@ -1,10 +1,21 @@
-import { Router } from "express";
-import { registrarUsuario, getUsers } from "../controllers/users.controller.js";
+import { Router } from 'express';
+import {
+  registrarVendedor,
+  loginVendedor,
+  logoutVendedor,
+  getVendedorActual,
+  cambiarPassword,
+  recuperarPassword
+} from '../controllers/users.controller.js';
 
 const router = Router();
 
-router.post("/register", registrarUsuario);
+// Autenticación
+router.post('/vendedor/registro', registrarVendedor);
+router.post('/vendedor/login', loginVendedor);
+router.post('/vendedor/logout', logoutVendedor);
+router.get('/vendedor/me', getVendedorActual);
+router.put('/vendedor/cambiar-password', cambiarPassword);
+router.post('/vendedor/recuperar-password', recuperarPassword);
 
-router.get('/get/:id',getUsers)
-
-export default router;
+export default router

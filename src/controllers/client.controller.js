@@ -101,20 +101,19 @@ export const deleteClient = async (req, res) => {
       return res.json({ message: `el usuario con id ${id} no existe` });
     }
 
-
     const { error } = await supabase
-    .from("Cliente")
-    .delete()
-    .eq("id", parseInt(id));
+      .from("Cliente")
+      .delete()
+      .eq("id", parseInt(id));
 
     if (error) {
       return res.status(500).json({
         message: "no se pudo eliminar al cliente",
-        error: error.message
+        error: error.message,
       });
     }
     return res.status(200).json({
-      message: `se elimino al cliente de id ${id} con nombre ${existe.nombre} ${existe.apellido}`
+      message: `se elimino al cliente de id ${id} con nombre ${existe.nombre} ${existe.apellido}`,
     });
   } catch (error) {
     return res.status(500).json({
@@ -122,4 +121,26 @@ export const deleteClient = async (req, res) => {
       error: error.message,
     });
   }
+};
+
+export const comprasCliente = async (req, res) => {
+  const { id } = req.params;
+  const { data, error } = await supabase
+    .from("Factura")
+    .select(
+      `codigo,fecha,Vendedor(nombre,apellido),Detalle_Factura(id,cantidad,Producto(nombre,precio_venta))`
+    )
+    .eq("id_cliente", parseInt(id))
+    .order('fecha',{ascending:false})
+
+  if (error) {
+    return res.status(404).json({
+      message: "no se encontro al cliente",
+    });
+  }
+
+  return res.status(200).json({
+    message: `Historial de compras del cliente`,
+    productos: data,
+  });
 };
