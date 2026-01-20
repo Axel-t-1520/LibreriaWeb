@@ -116,14 +116,14 @@ export const registerProduct = async (req, res) => {
 export const getProd = async (req, res) => {
   const { data, error } = await supabase.from("Producto").select("*");
   if (error) {
-    return res.status().json({
+    return res.status(500).json({
       message: "no se pudo listar productos",
     });
   }
   console.log(data)
   return res.status(200).json({
     message : `total de productos ${data.length}`,
-  data}
+    productos : data}
   );
 };
 
