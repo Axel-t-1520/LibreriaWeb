@@ -120,7 +120,7 @@ export const getProd = async (req, res) => {
       message: "no se pudo listar productos",
     });
   }
-  console.log(data)
+  
   return res.status(200).json({
     message : `total de productos ${data.length}`,
     productos : data}
