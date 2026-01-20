@@ -1,0 +1,16 @@
+# render.yaml
+services:
+  - type: web
+    name: libreria-backend
+    env: node
+    buildCommand: npm install
+    startCommand: npm start
+    envVars:
+      - key: PORT
+        value: 3000
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_KEY
+        sync: false
+      - key: NODE_ENV
+        value: production

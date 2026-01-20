@@ -1,4 +1,5 @@
 import { supabase } from "../config/db.js";
+import PDFDocument from 'pdfkit'
 
 export const realizarVenta = async (req, res) => {
   console.log("🔔 VENTA RECIBIDA:", new Date().toISOString());
@@ -11,7 +12,7 @@ export const realizarVenta = async (req, res) => {
   console.log("---");
   const { id_cliente, id_vendedor, productos } = req.body;
 
-  if (!id_cliente || !id_cliente || !productos || productos.length === 0) {
+  if (!id_cliente || !productos || productos.length === 0) {
     return res.status(400).json({
       message: "todos los campos deben estar completos",
     });
@@ -152,3 +153,355 @@ export const realizarVenta = async (req, res) => {
     },
   });
 };
+
+
+export const descargarPDFFactura = async (req, res) => {
+  try {
+    const { id } = req.params;
+    
+    // ============================================
+    // OBTENER FACTURA CON TODAS LAS RELACIONES
+    // ============================================
+    const { data: factura, error } = await supabase
+      .from('Factura')
+      .select(`
+        *,
+        Cliente(id, codigo, nombre, apellido, ci, telefono),
+        Vendedor(id, codigo, nombre, apellido),
+        Detalle_Factura(
+          id,
+          cantidad,
+          Producto(id, codigo, nombre, precio_venta)
+        )
+      `)
+      .eq('id', parseInt(id))
+      .single();
+
+    if (error || !factura) {
+      return res.status(404).json({
+        message: `No se encontró la factura con id ${id}`,
+        error: error?.message
+      });
+    }
+
+    // ============================================
+    // EXTRAER DATOS
+    // ============================================
+    const cliente = factura.Cliente;
+    const vendedor = factura.Vendedor;
+    
+    const productosValidos = factura.Detalle_Factura.map(detalle => ({
+      nombre: detalle.Producto.nombre,
+      cantidad: detalle.cantidad,
+      precio_venta: detalle.Producto.precio_venta,
+      subtotal: detalle.cantidad * detalle.Producto.precio_venta
+    }));
+
+    const totalVenta = productosValidos.reduce(
+      (total, prod) => total + prod.subtotal,
+      0
+    );
+
+    // ============================================
+    // CREAR PDF CON TAMAÑO PERSONALIZADO
+    // ============================================
+    const pdf = new PDFDocument({
+      margin: 20,           // ✅ Márgenes más pequeños (25px)
+      size: [397, 618]      // ✅ [ancho, alto] en puntos
+    });
+
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader(
+      'Content-Disposition', 
+      `attachment; filename=factura-${factura.codigo}.pdf`
+    );
+
+    pdf.pipe(res);
+
+    // ============================================
+    // DIMENSIONES DINÁMICAS
+    // ============================================
+    const pageWidth = pdf.page.width;      // 397
+    const pageHeight = pdf.page.height;    // 618
+    const margin = pdf.page.margins.left;  // 25
+    const contentWidth = pageWidth - (margin * 2); // 347
+
+    // ============================================
+    // ENCABEZADO (MÁS COMPACTO)
+    // ============================================
+    pdf
+      .fontSize(10)  // ✅ Más pequeño (era 26)
+      .fillColor('#101828')
+      .text('FACTURA DE VENTA', { align: 'center' })
+      .moveDown(0.3);
+
+    pdf
+      .fontSize(7)   // ✅ Más pequeño (era 10)
+      .fillColor('#666')
+      .text('Libreria T&M.', { align: 'center' })
+      .text('Calle: Mcal. Andres de Santa Cruz', { align: 'center' })
+      .text('telefono: 63423423',{align: 'center'})
+      .moveDown(1);
+
+    // ============================================
+    // INFORMACIÓN DE LA FACTURA
+    // ============================================
+    const yPosition = pdf.y;
+
+    pdf
+      .fontSize(8)  // ✅ Más pequeño (era 12)
+      .fillColor('#333')
+      .font('Helvetica-Bold')
+      .text('Factura:', margin, yPosition)
+      .font('Helvetica')
+      .text(factura.codigo, margin + 50, yPosition);
+
+    pdf
+      .font('Helvetica-Bold')
+      .text('Fecha:', margin, yPosition + 12)
+      .font('Helvetica')
+      .text(
+        new Date(factura.fecha).toLocaleDateString('es-BO', {
+          day: '2-digit',
+          month: '2-digit',
+          year: 'numeric'
+        }) + ' ' + new Date(factura.fecha).toLocaleTimeString('es-BO', {
+          hour: '2-digit',
+          minute: '2-digit'
+        }),
+        margin + 50,
+        yPosition + 12,
+        { width: contentWidth - 50 }
+      );
+
+    // Cliente
+    pdf
+      .font('Helvetica-Bold')
+      .text('Cliente:', margin, yPosition + 24)
+      .font('Helvetica')
+      .text(
+        `${cliente.nombre} ${cliente.apellido}`,
+        margin + 50,
+        yPosition + 24,
+        { width: contentWidth - 50 }
+      );
+
+    pdf
+      .font('Helvetica-Bold')
+      .text('CI:', margin, yPosition + 36)
+      .font('Helvetica')
+      .text(cliente.ci?.toString() || 'N/A', margin + 50, yPosition + 36);
+
+    // Vendedor
+    pdf
+      .font('Helvetica-Bold')
+      .text('Vendedor:', margin, yPosition + 48)
+      .font('Helvetica')
+      .text(
+        `${vendedor.nombre} ${vendedor.apellido}`,
+        margin + 50,
+        yPosition + 48,
+        { width: contentWidth - 50 }
+      )
+
+    pdf.moveDown(2);
+
+    // ============================================
+    // LÍNEA SEPARADORA
+    // ============================================
+    pdf
+      .strokeColor('#2563eb')
+      .lineWidth(1.5)
+      .moveTo(margin, pdf.y)
+      .lineTo(pageWidth - margin, pdf.y)
+      .stroke();
+
+    pdf.moveDown(0.5);
+
+    // ============================================
+    // TABLA DE PRODUCTOS - ENCABEZADO
+    // ============================================
+    const tableTop = pdf.y;
+    
+    pdf
+      .fontSize(7)  // ✅ Más pequeño
+      .fillColor('#fff')
+      .rect(margin, tableTop, contentWidth, 18)  // ✅ Altura reducida
+      .fill('#414243');
+
+    // Anchos de columnas adaptados
+    const col1Width = contentWidth * 0.40;  // 40% - Producto
+    const col2Width = contentWidth * 0.15;  // 15% - Cantidad
+    const col3Width = contentWidth * 0.22;  // 22% - P. Unit
+    const col4Width = contentWidth * 0.23;  // 23% - Subtotal
+
+    pdf
+      .fillColor('#fff')
+      .font('Helvetica-Bold')
+      .text('Producto', margin + 3, tableTop + 5, { width: col1Width - 3 })
+      .text('Cant.', margin + col1Width, tableTop + 5, { 
+        width: col2Width, 
+        align: 'center' 
+      })
+      .text('P. Unit.', margin + col1Width + col2Width, tableTop + 5, { 
+        width: col3Width, 
+        align: 'right' 
+      })
+      .text('Subtotal', margin + col1Width + col2Width + col3Width, tableTop + 5, { 
+        width: col4Width - 3, 
+        align: 'right' 
+      });
+
+    // ============================================
+    // TABLA DE PRODUCTOS - FILAS
+    // ============================================
+    let yPos = tableTop + 23;
+
+    productosValidos.forEach((producto, index) => {
+      // ✅ Verificar si necesita nueva página (más agresivo)
+      if (yPos > pageHeight - 100) {
+        pdf.addPage();
+        yPos = margin;
+
+        // Re-dibujar encabezado
+        pdf
+          .fontSize(7)
+          .fillColor('#fff')
+          .rect(margin, yPos, contentWidth, 18)
+          .fill('#2563eb');
+
+        pdf
+          .fillColor('#fff')
+          .font('Helvetica-Bold')
+          .text('Producto', margin + 3, yPos + 5, { width: col1Width - 3 })
+          .text('Cant.', margin + col1Width, yPos + 5, { 
+            width: col2Width, 
+            align: 'center' 
+          })
+          .text('P. Unit.', margin + col1Width + col2Width, yPos + 5, { 
+            width: col3Width, 
+            align: 'right' 
+          })
+          .text('Subtotal', margin + col1Width + col2Width + col3Width, yPos + 5, { 
+            width: col4Width - 3, 
+            align: 'right' 
+          });
+
+        yPos += 23;
+      }
+
+      // Alternar color de fondo
+      if (index % 2 === 0) {
+        pdf
+          .fillColor('#f9fafb')
+          .rect(margin, yPos - 3, contentWidth, 18)
+          .fill();
+      }
+
+      pdf
+        .fontSize(7)  // ✅ Más pequeño
+        .fillColor('#333')
+        .font('Helvetica')
+        .text(producto.nombre, margin + 3, yPos, { 
+          width: col1Width - 6,
+          ellipsis: true  // ✅ Truncar si es muy largo
+        })
+        .text(producto.cantidad.toString(), margin + col1Width, yPos, { 
+          width: col2Width, 
+          align: 'center' 
+        })
+        .text(
+          `${producto.precio_venta.toFixed(2)}`, 
+          margin + col1Width + col2Width, 
+          yPos, 
+          { width: col3Width, align: 'right' }
+        )
+        .text(
+          `${producto.subtotal.toFixed(2)}`, 
+          margin + col1Width + col2Width + col3Width, 
+          yPos, 
+          { width: col4Width - 3, align: 'right' }
+        );
+
+      yPos += 20;  // ✅ Espaciado reducido (era 30)
+    });
+
+    // ============================================
+    // LÍNEA ANTES DEL TOTAL
+    // ============================================
+    yPos += 5;
+    pdf
+      .strokeColor('#ddd')
+      .lineWidth(0.5)
+      .moveTo(margin, yPos)
+      .lineTo(pageWidth - margin, yPos)
+      .stroke();
+
+    // ============================================
+    // TOTAL
+    // ============================================
+    yPos += 10;
+
+    pdf
+      .fontSize(10)  // ✅ Reducido (era 14)
+      .font('Helvetica-Bold')
+      .fillColor('#050b16')
+      .text('TOTAL:', margin + col1Width + col2Width, yPos)
+      .fontSize(11)  // ✅ Reducido (era 16)
+      .text(
+        `Bs. ${totalVenta.toFixed(2)}`, 
+        margin + col1Width + col2Width + col3Width, 
+        yPos, 
+        { width: col4Width - 3, align: 'right' }
+      );
+
+    // ============================================
+    // PIE DE PÁGINA
+    // ============================================
+    const footerY = pageHeight - 35;
+
+    pdf
+      .fontSize(6)  // ✅ Muy pequeño (era 10)
+      .fillColor('#666')
+      .font('Helvetica-Oblique')
+      .text(
+        'Gracias por su compra',
+        margin,
+        footerY,
+        { align: 'center', width: contentWidth }
+      )
+
+    // ============================================
+    // FINALIZAR PDF
+    // ============================================
+    pdf.end();
+
+  } catch (error) {
+    console.error('Error al generar PDF:', error);
+    
+    if (!res.headersSent) {
+      return res.status(500).json({
+        message: 'Error al generar PDF',
+        error: error.message
+      });
+    }
+  }
+};
+
+
+export const listarFacturas = async(req,res)=>{
+  const{data:factura, error:errorFactura} = await supabase
+  .from('Factura')
+  .select('codigo,id_cliente,Cliente(nombre,apellido)')
+
+  if(errorFactura){
+    return res.status(404).json({
+      message: "no se pudo listar las facturas"
+    })
+  }
+
+  return res.status(200).json({
+    message: 'Lista de facturas',
+    facturas : factura
+  })
+}

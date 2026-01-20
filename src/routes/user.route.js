@@ -1,21 +1,30 @@
-import { Router } from 'express';
+import { Router } from "express";
 import {
   registrarVendedor,
   loginVendedor,
   logoutVendedor,
   getVendedorActual,
   cambiarPassword,
-  recuperarPassword
-} from '../controllers/users.controller.js';
+  recuperarPassword,
+  ventasRealizadas,
+} from "../controllers/users.controller.js";
+
+import { verificarToken, verificarVendedor } from "../middleware/auth.middleware.js";
 
 const router = Router();
 
 // Autenticación
-router.post('/vendedor/registro', registrarVendedor);
-router.post('/vendedor/login', loginVendedor);
-router.post('/vendedor/logout', logoutVendedor);
-router.get('/vendedor/me', getVendedorActual);
-router.put('/vendedor/cambiar-password', cambiarPassword);
-router.post('/vendedor/recuperar-password', recuperarPassword);
 
-export default router
+//rutas publicas 
+router.post("/vendedor/login", loginVendedor);
+router.post("/vendedor/registro",registrarVendedor);
+router.post("/vendedor/recuperar-password", recuperarPassword);
+
+
+//rutas protegidas
+router.get("/ventashechas/:id",verificarVendedor,ventasRealizadas);
+router.post("/vendedor/logout",verificarToken,logoutVendedor);
+router.get("/vendedor/me",verificarToken, getVendedorActual);
+router.put("/vendedor/cambiar-password",verificarToken, cambiarPassword);
+
+export default router;

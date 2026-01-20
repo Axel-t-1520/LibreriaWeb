@@ -1,31 +1,118 @@
 import { supabase } from "../config/db.js";
+import {v4 as uuidv4} from 'uuid'
 
 export const registerProduct = async (req, res) => {
-  const {
-    nombre,
-    descripcion,
-    precio_unitario,
-    stock,
-    precio_venta,
-    categoria,
-  } = req.body;
-  const { data, error } = await supabase
-    .from("Producto")
-    .insert([
-      { nombre, descripcion, precio_unitario, stock, precio_venta, categoria },
-    ])
-    .select();
+  try {
+    const {
+      nombre,
+      descripcion,
+      precio_unitario,
+      stock,
+      precio_venta,
+      categoria,
+    } = req.body;
+    
+    const imagen = req.file; // Viene de multer si se subió archivo
 
-  if (error) {
-    return res.status().json({
-      message: "no se registro el producto",
+    // ============================================
+    // PASO 1: Validar campos requeridos
+    // ============================================
+    if (!nombre || !precio_unitario || !stock || !precio_venta) {
+      return res.status(400).json({
+        message: "Los campos nombre, precio_unitario, stock y precio_venta son requeridos"
+      });
+    }
+
+    // ============================================
+    // PASO 2: Subir imagen SI existe (OPCIONAL)
+    // ============================================
+    let imagenUrl = null; // Por defecto, sin imagen
+
+    if (imagen) {
+      console.log('📸 Imagen detectada, subiendo a Supabase Storage...');
+      
+      // Generar nombre único para el archivo
+      const fileExt = imagen.originalname.split('.').pop(); // Extensión (.jpg, .png, etc)
+      const fileName = `${uuidv4()}.${fileExt}`; // Ejemplo: "a1b2c3d4-e5f6.jpg"
+      const filePath = `productos/${fileName}`; // Ruta en el bucket
+
+      // Subir archivo a Supabase Storage
+      const { data: uploadData, error: uploadError } = await supabase.storage
+        .from('productos') // ← Nombre del bucket (debes crearlo en Supabase)
+        .upload(filePath, imagen.buffer, {
+          contentType: imagen.mimetype, // image/jpeg, image/png, etc
+          cacheControl: '3600' // Cache de 1 hora
+        });
+
+      if (uploadError) {
+        console.error('❌ Error al subir imagen:', uploadError);
+        return res.status(500).json({
+          message: 'Error al subir la imagen',
+          error: uploadError.message
+        });
+      }
+
+      // Obtener URL pública de la imagen
+      const { data: urlData } = supabase.storage
+        .from('productos')
+        .getPublicUrl(filePath);
+
+      imagenUrl = urlData.publicUrl; // Guardar URL
+      console.log('✅ Imagen subida:', imagenUrl);
+    } else {
+      console.log('ℹ️ No se proporcionó imagen, continuando sin ella...');
+    }
+
+    // ============================================
+    // PASO 3: Crear producto en la base de datos
+    // ============================================
+    const { data, error } = await supabase
+      .from("Producto")
+      .insert([{
+        nombre,
+        descripcion,
+        precio_unitario: parseFloat(precio_unitario), // Convertir a número
+        stock: parseInt(stock),
+        precio_venta: parseFloat(precio_venta),
+        categoria,
+        imagen_url: imagenUrl // ← Guardar URL (puede ser null si no hay imagen)
+      }])
+      .select();
+
+    if (error) {
+      console.error('❌ Error al registrar producto:', error);
+      
+      // Si subimos imagen pero falló el producto, eliminar imagen
+      if (imagenUrl) {
+        const filePath = imagenUrl.split('/').pop();
+        await supabase.storage
+          .from('productos')
+          .remove([`productos/${filePath}`]);
+        console.log('🗑️ Imagen eliminada por error en registro');
+      }
+      
+      return res.status(500).json({
+        message: "No se pudo registrar el producto",
+        error: error.message
+      });
+    }
+
+    // ============================================
+    // PASO 4: Respuesta exitosa
+    // ============================================
+    return res.status(201).json({
+      message: "Producto registrado exitosamente",
+      producto: data[0]
+    });
+
+  } catch (error) {
+    console.error('❌ Error del servidor:', error);
+    return res.status(500).json({
+      message: "Error del servidor",
+      error: error.message
     });
   }
-  res.status(200).json(data, {
-    message: "se registro el producto",
-  });
 };
-
 export const getProd = async (req, res) => {
   const { data, error } = await supabase.from("Producto").select("*");
   if (error) {

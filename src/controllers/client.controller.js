@@ -124,23 +124,99 @@ export const deleteClient = async (req, res) => {
 };
 
 export const comprasCliente = async (req, res) => {
-  const { id } = req.params;
-  const { data, error } = await supabase
-    .from("Factura")
-    .select(
-      `codigo,fecha,Vendedor(nombre,apellido),Detalle_Factura(id,cantidad,Producto(nombre,precio_venta))`
-    )
-    .eq("id_cliente", parseInt(id))
-    .order('fecha',{ascending:false})
+  try {
+    const { id } = req.params;
+    
+    // Primero verificar que el cliente existe
+    const { data: cliente, error: errorCliente } = await supabase
+      .from("Cliente")
+      .select("id, nombre, apellido")
+      .eq("id", parseInt(id))
+      .single();
+    
+    if (errorCliente || !cliente) {
+      return res.status(404).json({
+        message: `No se encontró el cliente con id ${id}`
+      });
+    }
+    
+    // Obtener facturas del cliente
+    const { data, error } = await supabase
+      .from("Factura")
+      .select(`
+        codigo,
+        fecha,
+        Vendedor(nombre, apellido),
+        Detalle_Factura(
+          id,
+          cantidad,
+          Producto(nombre, precio_venta)
+        )
+      `)
+      .eq("id_cliente", parseInt(id))
+      .order("fecha", { ascending: false });
 
-  if (error) {
-    return res.status(404).json({
-      message: "no se encontro al cliente",
+    if (error) {
+      return res.status(500).json({
+        message: "Error al obtener historial de compras",
+        error: error.message
+      });
+    }
+
+    // Si no hay compras
+    if (!data || data.length === 0) {
+      return res.status(200).json({
+        message: `${cliente.nombre} ${cliente.apellido} no tiene compras registradas`,
+        cliente: {
+          id: cliente.id,
+          nombre: `${cliente.nombre} ${cliente.apellido}`
+        },
+        total_compras: 0,
+        //message:"no tienes ninguna factura",
+        facturas: []
+      });
+    }
+
+    // Calcular totales
+    let totalGastado = 0;
+    
+    const facturasConTotal = data.map(factura => {
+      const total = factura.Detalle_Factura.reduce((sum, detalle) => {
+        return sum + (detalle.cantidad * detalle.Producto.precio_venta);
+      }, 0);
+      
+      totalGastado += total;
+      
+      return {
+        codigo: factura.codigo,
+        fecha: factura.fecha,
+        vendedor: `${factura.Vendedor.nombre} ${factura.Vendedor.apellido}`,
+        productos: factura.Detalle_Factura.map(detalle => ({
+          nombre: detalle.Producto.nombre,
+          cantidad: detalle.cantidad,
+          precio_unitario: detalle.Producto.precio_venta,
+          subtotal: detalle.cantidad * detalle.Producto.precio_venta
+        })),
+        total: total
+      };
+    });
+
+    return res.status(200).json({
+      message: `Historial de compras de ${cliente.nombre} ${cliente.apellido}`,
+      cliente: {
+        id: cliente.id,
+        nombre: `${cliente.nombre} ${cliente.apellido}`
+      },
+      total_compras: data.length,
+      total_gastado: totalGastado,
+      promedio_por_compra: totalGastado / data.length,
+      facturas: facturasConTotal
+    });
+    
+  } catch (error) {
+    return res.status(500).json({
+      message: "Error del servidor",
+      error: error.message
     });
   }
-
-  return res.status(200).json({
-    message: `Historial de compras del cliente`,
-    productos: data,
-  });
 };
