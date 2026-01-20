@@ -114,19 +114,35 @@ export const registerProduct = async (req, res) => {
   }
 };
 export const getProd = async (req, res) => {
-  const { data, error } = await supabase.from("Producto").select("*");
-  if (error) {
+  try {
+    console.log('📦 Obteniendo productos...');
+    
+    const { data, error } = await supabase
+      .from("Producto")
+      .select("*");
+    
+    if (error) {
+      console.error('❌ Error de Supabase:', error);
+      return res.status(500).json({
+        message: "Error al obtener productos de la base de datos",
+        error: error.message
+      });
+    }
+    
+    console.log(`✅ Productos obtenidos: ${data.length}`);
+    
+    return res.status(200).json({
+      message: `total de productos ${data.length}`,
+      productos: data
+    });
+  } catch (err) {
+    console.error('❌ Error general:', err);
     return res.status(500).json({
-      message: "no se pudo listar productos",
+      message: "Error del servidor",
+      error: err.message
     });
   }
-  
-  return res.status(200).json({
-    message : `total de productos ${data.length}`,
-    productos : data}
-  );
 };
-
 export const getProductId = async (req, res) => {
   console.log(req.params);
   const { id } = req.params;
