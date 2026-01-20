@@ -4,7 +4,7 @@ import {
   ventasMesActual,
   ventasTotal,
   ventasUltimos7Dias,
-} from "../controllers/dashboard.controller";
+} from "../controllers/dashboard.controller.js";
 
 const router = Router();
 
