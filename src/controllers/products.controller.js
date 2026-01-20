@@ -160,6 +160,7 @@ export const getProductCat = async (req, res) => {
   return res.status(200).json(data);
 };
 
+
 export const updateProd = async (req, res) => {
   try {
     const { id } = req.params;
@@ -172,15 +173,85 @@ export const updateProd = async (req, res) => {
       categoria,
     } = req.body;
 
+    const nuevaImagen = req.file; // Viene de multer si se sube nueva imagen
+
+    // ============================================
+    // PASO 1: Verificar que el producto existe
+    // ============================================
+    const { data: productoExistente, error: errorProducto } = await supabase
+      .from("Producto")
+      .select("id, imagen_url")
+      .eq("id", parseInt(id))
+      .single();
+
+    if (errorProducto || !productoExistente) {
+      return res.status(404).json({
+        message: "Producto no encontrado"
+      });
+    }
+
+    // ============================================
+    // PASO 2: Subir nueva imagen SI existe (OPCIONAL)
+    // ============================================
+    let imagenUrl = productoExistente.imagen_url; // Mantener la actual por defecto
+
+    if (nuevaImagen) {
+      console.log('📸 Nueva imagen detectada, subiendo...');
+
+      // Eliminar imagen antigua del storage si existe
+      if (productoExistente.imagen_url) {
+        const urlParts = productoExistente.imagen_url.split('/');
+        const fileName = urlParts[urlParts.length - 1];
+        
+        await supabase.storage
+          .from('productos')
+          .remove([`productos/${fileName}`]);
+        
+        console.log('🗑️ Imagen antigua eliminada');
+      }
+
+      // Subir nueva imagen
+      const fileExt = nuevaImagen.originalname.split('.').pop();
+      const fileName = `${uuidv4()}.${fileExt}`;
+      const filePath = `productos/${fileName}`;
+
+      const { error: uploadError } = await supabase.storage
+        .from('productos')
+        .upload(filePath, nuevaImagen.buffer, {
+          contentType: nuevaImagen.mimetype,
+          cacheControl: '3600'
+        });
+
+      if (uploadError) {
+        console.error('❌ Error al subir imagen:', uploadError);
+        return res.status(500).json({
+          message: 'Error al subir la imagen',
+          error: uploadError.message
+        });
+      }
+
+      // Obtener URL pública
+      const { data: urlData } = supabase.storage
+        .from('productos')
+        .getPublicUrl(filePath);
+
+      imagenUrl = urlData.publicUrl;
+      console.log('✅ Nueva imagen subida:', imagenUrl);
+    }
+
+    // ============================================
+    // PASO 3: Actualizar producto
+    // ============================================
     const { data, error } = await supabase
       .from("Producto")
       .update({
         nombre,
         descripcion,
-        precio_unitario,
-        stock,
-        precio_venta,
+        precio_unitario: precio_unitario ? parseFloat(precio_unitario) : undefined,
+        stock: stock ? parseInt(stock) : undefined,
+        precio_venta: precio_venta ? parseFloat(precio_venta) : undefined,
         categoria,
+        imagen_url: imagenUrl // Actualizar con la nueva URL o mantener la anterior
       })
       .eq("id", parseInt(id))
       .select();
@@ -202,14 +273,15 @@ export const updateProd = async (req, res) => {
       message: "Producto actualizado exitosamente",
       producto: data[0],
     });
+
   } catch (err) {
+    console.error('Error del servidor:', err);
     return res.status(500).json({
       message: "Error del servidor",
       error: err.message,
     });
   }
 };
-
 export const deleteProd = async (req, res) => {
   try {
     const { id } = req.params;
