@@ -16,7 +16,7 @@ const app = express();
 // CORS CONFIGURADO CORRECTAMENTE
 // ============================================
 app.use(cors({
-  origin: ['http://localhost:5173', 'https://tu-frontend.vercel.app'], // Agregar tu dominio de producción después
+  origin: ['http://localhost:5173', 'https://libreria-frontend-theta.vercel.app'], // Agregar tu dominio de producción después
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization']
