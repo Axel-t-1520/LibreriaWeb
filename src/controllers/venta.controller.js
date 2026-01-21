@@ -492,7 +492,7 @@ export const descargarPDFFactura = async (req, res) => {
 export const listarFacturas = async(req,res)=>{
   const{data:factura, error:errorFactura} = await supabase
   .from('Factura')
-  .select('codigo,id_cliente,Cliente(nombre,apellido)')
+  .select('id,codigo,id_cliente,Cliente(nombre,apellido)')
 
   if(errorFactura){
     return res.status(404).json({
