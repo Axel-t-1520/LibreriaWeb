@@ -119,7 +119,7 @@ export const getProd = async (req, res) => {
     
     const { data, error } = await supabase
       .from("Producto")
-      .select("*");
+      .select(`*, Detalle_Factura(count)`);
     
     if (error) {
       console.error('❌ Error de Supabase:', error);
@@ -129,11 +129,16 @@ export const getProd = async (req, res) => {
       });
     }
     
-    console.log(`✅ Productos obtenidos: ${data.length}`);
+    const productosProcesados = data.map(producto => ({
+      ...producto,
+      // Si el conteo es 0, es true (se puede borrar). Si es mayor a 0, es false.
+      se_puede_eliminar: producto.Detalle_Factura[0].count === 0
+    }));
     
     return res.status(200).json({
       message: `total de productos ${data.length}`,
-      productos: data
+      productos: data,
+      product : productosProcesados
     });
   } catch (err) {
     console.error('❌ Error general:', err);
