@@ -159,6 +159,15 @@ export const descargarPDFFactura = async (req, res) => {
   try {
     const { id } = req.params;
     
+    const facturaId = parseInt(id);
+    
+    if (isNaN(facturaId)) {
+      return res.status(400).json({
+        message: 'ID de factura inválido',
+        error: 'El ID debe ser un número válido'
+      });
+    }
+    
     // ============================================
     // OBTENER FACTURA CON TODAS LAS RELACIONES
     // ============================================
@@ -174,13 +183,47 @@ export const descargarPDFFactura = async (req, res) => {
           Producto(id, codigo, nombre, precio_venta)
         )
       `)
-      .eq('id', parseInt(id))
+      .eq('id', facturaId)
       .single();
 
     if (error || !factura) {
       return res.status(404).json({
-        message: `No se encontró la factura con id ${id}`,
+        message: `No se encontró la factura con id ${facturaId}`,
         error: error?.message
+      });
+    }
+
+    // ✅ VALIDAR QUE EXISTAN LAS RELACIONES
+    if (!factura.Cliente) {
+      return res.status(404).json({
+        message: 'No se encontró el cliente asociado a la factura',
+        debug: { factura }
+      });
+    }
+
+    if (!factura.Vendedor) {
+      return res.status(404).json({
+        message: 'No se encontró el vendedor asociado a la factura',
+        debug: { factura }
+      });
+    }
+
+    if (!factura.Detalle_Factura || factura.Detalle_Factura.length === 0) {
+      return res.status(404).json({
+        message: 'No se encontraron productos en la factura',
+        debug: { factura }
+      });
+    }
+
+    // ✅ VALIDAR PRODUCTOS DENTRO DE DETALLES
+    const detallesConProductos = factura.Detalle_Factura.filter(
+      detalle => detalle.Producto !== null
+    );
+
+    if (detallesConProductos.length === 0) {
+      return res.status(404).json({
+        message: 'No se encontraron productos válidos en los detalles',
+        debug: { detalles: factura.Detalle_Factura }
       });
     }
 
@@ -190,7 +233,7 @@ export const descargarPDFFactura = async (req, res) => {
     const cliente = factura.Cliente;
     const vendedor = factura.Vendedor;
     
-    const productosValidos = factura.Detalle_Factura.map(detalle => ({
+    const productosValidos = detallesConProductos.map(detalle => ({
       nombre: detalle.Producto.nombre,
       cantidad: detalle.cantidad,
       precio_venta: detalle.Producto.precio_venta,
@@ -203,53 +246,49 @@ export const descargarPDFFactura = async (req, res) => {
     );
 
     // ============================================
-    // CREAR PDF CON TAMAÑO PERSONALIZADO
+    // CONFIGURAR HEADERS
     // ============================================
-    const pdf = new PDFDocument({
-      margin: 20,           // ✅ Márgenes más pequeños (25px)
-      size: [397, 618]      // ✅ [ancho, alto] en puntos
-    });
-
     res.setHeader('Content-Type', 'application/pdf');
     res.setHeader(
       'Content-Disposition', 
       `attachment; filename=factura-${factura.codigo}.pdf`
     );
 
+    // ============================================
+    // CREAR PDF
+    // ============================================
+    const pdf = new PDFDocument({
+      margin: 20,
+      size: [397, 618]
+    });
+
     pdf.pipe(res);
 
-    // ============================================
-    // DIMENSIONES DINÁMICAS
-    // ============================================
-    const pageWidth = pdf.page.width;      // 397
-    const pageHeight = pdf.page.height;    // 618
-    const margin = pdf.page.margins.left;  // 25
-    const contentWidth = pageWidth - (margin * 2); // 347
+    // ... resto del código del PDF sin cambios ...
+    
+    const pageWidth = pdf.page.width;
+    const pageHeight = pdf.page.height;
+    const margin = pdf.page.margins.left;
+    const contentWidth = pageWidth - (margin * 2);
 
-    // ============================================
-    // ENCABEZADO (MÁS COMPACTO)
-    // ============================================
     pdf
-      .fontSize(10)  // ✅ Más pequeño (era 26)
+      .fontSize(10)
       .fillColor('#101828')
       .text('FACTURA DE VENTA', { align: 'center' })
       .moveDown(0.3);
 
     pdf
-      .fontSize(7)   // ✅ Más pequeño (era 10)
+      .fontSize(7)
       .fillColor('#666')
       .text('Libreria T&M.', { align: 'center' })
       .text('Calle: Mcal. Andres de Santa Cruz', { align: 'center' })
       .text('telefono: 63423423',{align: 'center'})
       .moveDown(1);
 
-    // ============================================
-    // INFORMACIÓN DE LA FACTURA
-    // ============================================
     const yPosition = pdf.y;
 
     pdf
-      .fontSize(8)  // ✅ Más pequeño (era 12)
+      .fontSize(8)
       .fillColor('#333')
       .font('Helvetica-Bold')
       .text('Factura:', margin, yPosition)
@@ -274,7 +313,6 @@ export const descargarPDFFactura = async (req, res) => {
         { width: contentWidth - 50 }
       );
 
-    // Cliente
     pdf
       .font('Helvetica-Bold')
       .text('Cliente:', margin, yPosition + 24)
@@ -292,7 +330,6 @@ export const descargarPDFFactura = async (req, res) => {
       .font('Helvetica')
       .text(cliente.ci?.toString() || 'N/A', margin + 50, yPosition + 36);
 
-    // Vendedor
     pdf
       .font('Helvetica-Bold')
       .text('Vendedor:', margin, yPosition + 48)
@@ -306,9 +343,6 @@ export const descargarPDFFactura = async (req, res) => {
 
     pdf.moveDown(2);
 
-    // ============================================
-    // LÍNEA SEPARADORA
-    // ============================================
     pdf
       .strokeColor('#2563eb')
       .lineWidth(1.5)
@@ -318,22 +352,18 @@ export const descargarPDFFactura = async (req, res) => {
 
     pdf.moveDown(0.5);
 
-    // ============================================
-    // TABLA DE PRODUCTOS - ENCABEZADO
-    // ============================================
     const tableTop = pdf.y;
     
     pdf
-      .fontSize(7)  // ✅ Más pequeño
+      .fontSize(7)
       .fillColor('#fff')
-      .rect(margin, tableTop, contentWidth, 18)  // ✅ Altura reducida
+      .rect(margin, tableTop, contentWidth, 18)
       .fill('#414243');
 
-    // Anchos de columnas adaptados
-    const col1Width = contentWidth * 0.40;  // 40% - Producto
-    const col2Width = contentWidth * 0.15;  // 15% - Cantidad
-    const col3Width = contentWidth * 0.22;  // 22% - P. Unit
-    const col4Width = contentWidth * 0.23;  // 23% - Subtotal
+    const col1Width = contentWidth * 0.40;
+    const col2Width = contentWidth * 0.15;
+    const col3Width = contentWidth * 0.22;
+    const col4Width = contentWidth * 0.23;
 
     pdf
       .fillColor('#fff')
@@ -352,18 +382,13 @@ export const descargarPDFFactura = async (req, res) => {
         align: 'right' 
       });
 
-    // ============================================
-    // TABLA DE PRODUCTOS - FILAS
-    // ============================================
     let yPos = tableTop + 23;
 
     productosValidos.forEach((producto, index) => {
-      // ✅ Verificar si necesita nueva página (más agresivo)
       if (yPos > pageHeight - 100) {
         pdf.addPage();
         yPos = margin;
 
-        // Re-dibujar encabezado
         pdf
           .fontSize(7)
           .fillColor('#fff')
@@ -390,7 +415,6 @@ export const descargarPDFFactura = async (req, res) => {
         yPos += 23;
       }
 
-      // Alternar color de fondo
       if (index % 2 === 0) {
         pdf
           .fillColor('#f9fafb')
@@ -399,12 +423,12 @@ export const descargarPDFFactura = async (req, res) => {
       }
 
       pdf
-        .fontSize(7)  // ✅ Más pequeño
+        .fontSize(7)
         .fillColor('#333')
         .font('Helvetica')
         .text(producto.nombre, margin + 3, yPos, { 
           width: col1Width - 6,
-          ellipsis: true  // ✅ Truncar si es muy largo
+          ellipsis: true
         })
         .text(producto.cantidad.toString(), margin + col1Width, yPos, { 
           width: col2Width, 
@@ -423,12 +447,9 @@ export const descargarPDFFactura = async (req, res) => {
           { width: col4Width - 3, align: 'right' }
         );
 
-      yPos += 20;  // ✅ Espaciado reducido (era 30)
+      yPos += 20;
     });
 
-    // ============================================
-    // LÍNEA ANTES DEL TOTAL
-    // ============================================
     yPos += 5;
     pdf
       .strokeColor('#ddd')
@@ -437,17 +458,14 @@ export const descargarPDFFactura = async (req, res) => {
       .lineTo(pageWidth - margin, yPos)
       .stroke();
 
-    // ============================================
-    // TOTAL
-    // ============================================
     yPos += 10;
 
     pdf
-      .fontSize(10)  // ✅ Reducido (era 14)
+      .fontSize(10)
       .font('Helvetica-Bold')
       .fillColor('#050b16')
       .text('TOTAL:', margin + col1Width + col2Width, yPos)
-      .fontSize(11)  // ✅ Reducido (era 16)
+      .fontSize(11)
       .text(
         `Bs. ${totalVenta.toFixed(2)}`, 
         margin + col1Width + col2Width + col3Width, 
@@ -455,13 +473,10 @@ export const descargarPDFFactura = async (req, res) => {
         { width: col4Width - 3, align: 'right' }
       );
 
-    // ============================================
-    // PIE DE PÁGINA
-    // ============================================
     const footerY = pageHeight - 35;
 
     pdf
-      .fontSize(6)  // ✅ Muy pequeño (era 10)
+      .fontSize(6)
       .fillColor('#666')
       .font('Helvetica-Oblique')
       .text(
@@ -471,9 +486,6 @@ export const descargarPDFFactura = async (req, res) => {
         { align: 'center', width: contentWidth }
       )
 
-    // ============================================
-    // FINALIZAR PDF
-    // ============================================
     pdf.end();
 
   } catch (error) {
@@ -487,7 +499,6 @@ export const descargarPDFFactura = async (req, res) => {
     }
   }
 };
-
 
 export const listarFacturas = async(req,res)=>{
   const{data:factura, error:errorFactura} = await supabase
