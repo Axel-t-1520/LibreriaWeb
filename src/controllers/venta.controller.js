@@ -3,13 +3,7 @@ import PDFDocument from 'pdfkit'
 
 export const realizarVenta = async (req, res) => {
   console.log("🔔 VENTA RECIBIDA:", new Date().toISOString());
-  console.log(
-    "Cliente:",
-    req.body.id_cliente,
-    "Vendedor:",
-    req.body.id_vendedor
-  );
-  console.log("---");
+  // ... (logs) ...
   const { id_cliente, id_vendedor, productos } = req.body;
 
   if (!id_cliente || !productos || productos.length === 0) {
@@ -18,8 +12,7 @@ export const realizarVenta = async (req, res) => {
     });
   }
 
-  //valida si existe el cliente
-
+  // --- VALIDACIÓN CLIENTE ---
   const { data: cliente } = await supabase
     .from("Cliente")
     .select("*")
@@ -32,8 +25,7 @@ export const realizarVenta = async (req, res) => {
     });
   }
 
-  //valida si existe el vendedor
-
+  // --- VALIDACIÓN VENDEDOR ---
   const { data: vendedor } = await supabase
     .from("Vendedor")
     .select("*")
@@ -42,12 +34,14 @@ export const realizarVenta = async (req, res) => {
 
   if (!vendedor) {
     return res.status(500).json({
-      message: `el cliente con id ${id_cliente} no existe`,
+      // CORREGIDO: Decía "cliente" en el mensaje de error
+      message: `el vendedor con id ${id_vendedor} no existe`,
     });
   }
 
   const productosValidos = [];
 
+  // --- VALIDACIÓN PRODUCTOS Y PRECIO ---
   for (let item of productos) {
     const { data: producto, error: errorProducto } = await supabase
       .from("Producto")
@@ -71,11 +65,13 @@ export const realizarVenta = async (req, res) => {
       id_producto: producto.id,
       nombre: producto.nombre,
       cantidad: item.cantidad,
-      precio_venta: producto.precio_venta,
+      // Aquí ya estabas capturando el precio correctamente:
+      precio_venta: producto.precio_venta, 
       subtotal: producto.precio_venta * item.cantidad,
     });
   }
 
+  // --- CREAR FACTURA ---
   const { data: factura, error: errorFactura } = await supabase
     .from("Factura")
     .insert({
@@ -93,10 +89,15 @@ export const realizarVenta = async (req, res) => {
     });
   }
 
+  // --- INSERTAR DETALLES (AQUÍ ESTÁ EL CAMBIO IMPORTANTE) ---
   const detallesParaInsertar = productosValidos.map((prod) => ({
     id_factura: factura.id,
     id_producto: prod.id_producto,
     cantidad: prod.cantidad,
+    
+    // 🔥 CAMBIO CRÍTICO: Guardamos el precio histórico
+    // Asignamos el precio que capturamos arriba a la columna de la BD
+    precio_unitario: prod.precio_venta 
   }));
 
   const { data: detalles, error: errorDetalles } = await supabase
@@ -105,7 +106,7 @@ export const realizarVenta = async (req, res) => {
     .select();
 
   if (errorDetalles) {
-    // Si falla, deberíamos eliminar la factura creada (rollback manual)
+    // Rollback manual si falla el detalle
     await supabase.from("Factura").delete().eq("id", factura.id);
 
     return res.status(500).json({
@@ -114,6 +115,7 @@ export const realizarVenta = async (req, res) => {
     });
   }
 
+  // --- REDUCIR STOCK ---
   for (let prod of productosValidos) {
     const { error: errorStock } = await supabase.rpc("reducir_stock", {
       p_id_producto: prod.id_producto,
@@ -122,6 +124,8 @@ export const realizarVenta = async (req, res) => {
 
     if (errorStock) {
       console.error("Error al actualizar stock:", errorStock);
+      // Nota: Aquí idealmente también harías rollback, pero es más complejo.
+      // Por ahora está bien informar el error.
       return res.status(500).json({
         message: "Error al actualizar el stock del producto",
         error: errorStock.message,
@@ -158,18 +162,14 @@ export const realizarVenta = async (req, res) => {
 export const descargarPDFFactura = async (req, res) => {
   try {
     const { id } = req.params;
-    
     const facturaId = parseInt(id);
     
     if (isNaN(facturaId)) {
-      return res.status(400).json({
-        message: 'ID de factura inválido',
-        error: 'El ID debe ser un número válido'
-      });
+      return res.status(400).json({ message: 'ID de factura inválido' });
     }
     
     // ============================================
-    // OBTENER FACTURA CON TODAS LAS RELACIONES
+    // 1. OBTENER FACTURA (CONSULTA CORREGIDA)
     // ============================================
     const { data: factura, error } = await supabase
       .from('Factura')
@@ -180,323 +180,177 @@ export const descargarPDFFactura = async (req, res) => {
         Detalle_Factura(
           id,
           cantidad,
-          Producto(id, codigo, nombre, precio_venta)
+          precio_unitario,  // <--- ¡IMPORTANTE! Pedimos el precio histórico
+          Producto(id, codigo, nombre) // Ya no necesitamos precio_venta de aquí
         )
       `)
       .eq('id', facturaId)
       .single();
 
     if (error || !factura) {
-      return res.status(404).json({
-        message: `No se encontró la factura con id ${facturaId}`,
-        error: error?.message
-      });
+      return res.status(404).json({ message: 'Factura no encontrada', error: error?.message });
     }
 
-    // ✅ VALIDAR QUE EXISTAN LAS RELACIONES
-    if (!factura.Cliente) {
-      return res.status(404).json({
-        message: 'No se encontró el cliente asociado a la factura',
-        debug: { factura }
-      });
-    }
-
-    if (!factura.Vendedor) {
-      return res.status(404).json({
-        message: 'No se encontró el vendedor asociado a la factura',
-        debug: { factura }
-      });
-    }
-
-    if (!factura.Detalle_Factura || factura.Detalle_Factura.length === 0) {
-      return res.status(404).json({
-        message: 'No se encontraron productos en la factura',
-        debug: { factura }
-      });
-    }
-
-    // ✅ VALIDAR PRODUCTOS DENTRO DE DETALLES
-    const detallesConProductos = factura.Detalle_Factura.filter(
-      detalle => detalle.Producto !== null
-    );
-
-    if (detallesConProductos.length === 0) {
-      return res.status(404).json({
-        message: 'No se encontraron productos válidos en los detalles',
-        debug: { detalles: factura.Detalle_Factura }
-      });
+    // Validaciones de relaciones...
+    if (!factura.Cliente || !factura.Vendedor || !factura.Detalle_Factura?.length) {
+      return res.status(404).json({ message: 'Datos de la factura incompletos' });
     }
 
     // ============================================
-    // EXTRAER DATOS
+    // 2. EXTRAER DATOS (LÓGICA CORREGIDA)
     // ============================================
     const cliente = factura.Cliente;
     const vendedor = factura.Vendedor;
     
-    const productosValidos = detallesConProductos.map(detalle => ({
-      nombre: detalle.Producto.nombre,
-      cantidad: detalle.cantidad,
-      precio_venta: detalle.Producto.precio_venta,
-      subtotal: detalle.cantidad * detalle.Producto.precio_venta
-    }));
+    // Filtramos detalles que tengan producto (por seguridad)
+    const detallesConProductos = factura.Detalle_Factura.filter(d => d.Producto);
 
-    const totalVenta = productosValidos.reduce(
-      (total, prod) => total + prod.subtotal,
-      0
-    );
+    const productosValidos = detallesConProductos.map(detalle => {
+      // AQUÍ ESTÁ EL CAMBIO CRÍTICO:
+      // Usamos detalle.precio_unitario (el precio guardado al momento de vender)
+      // Si por alguna razón es null (ventas viejas), usamos un fallback (0)
+      const precioReal = detalle.precio_unitario || 0; 
+      
+      return {
+        nombre: detalle.Producto.nombre,
+        cantidad: detalle.cantidad,
+        precio_venta: precioReal, 
+        subtotal: detalle.cantidad * precioReal
+      };
+    });
+
+    const totalVenta = productosValidos.reduce((total, prod) => total + prod.subtotal, 0);
 
     // ============================================
-    // CONFIGURAR HEADERS
+    // 3. CONFIGURAR PDF
     // ============================================
     res.setHeader('Content-Type', 'application/pdf');
-    res.setHeader(
-      'Content-Disposition', 
-      `attachment; filename=factura-${factura.codigo}.pdf`
-    );
+    res.setHeader('Content-Disposition', `attachment; filename=factura-${factura.codigo || facturaId}.pdf`);
 
-    // ============================================
-    // CREAR PDF
-    // ============================================
     const pdf = new PDFDocument({
       margin: 20,
-      size: [397, 618]
+      size: [397, 618] // Tamaño personalizado (aprox media carta o recibo grande)
     });
 
     pdf.pipe(res);
 
-    // ... resto del código del PDF sin cambios ...
-    
+    // Variables de diseño
     const pageWidth = pdf.page.width;
     const pageHeight = pdf.page.height;
     const margin = pdf.page.margins.left;
     const contentWidth = pageWidth - (margin * 2);
 
-    pdf
-      .fontSize(10)
-      .fillColor('#101828')
-      .text('FACTURA DE VENTA', { align: 'center' })
-      .moveDown(0.3);
-
-    pdf
-      .fontSize(7)
-      .fillColor('#666')
+    // --- ENCABEZADO ---
+    pdf.fontSize(10).fillColor('#101828').text('FACTURA DE VENTA', { align: 'center' }).moveDown(0.3);
+    
+    pdf.fontSize(7).fillColor('#666')
       .text('Libreria T&M.', { align: 'center' })
       .text('Calle: Mcal. Andres de Santa Cruz', { align: 'center' })
-      .text('telefono: 63423423',{align: 'center'})
+      .text('Teléfono: 63423423',{align: 'center'})
       .moveDown(1);
 
-    const yPosition = pdf.y;
+    const yStart = pdf.y;
 
-    pdf
-      .fontSize(8)
-      .fillColor('#333')
-      .font('Helvetica-Bold')
-      .text('Factura:', margin, yPosition)
-      .font('Helvetica')
-      .text(factura.codigo, margin + 50, yPosition);
+    // --- DATOS GENERALES ---
+    // Helper para escribir etiquetas en negrita y valores normal
+    const printField = (label, value, y) => {
+      pdf.font('Helvetica-Bold').text(label, margin, y);
+      pdf.font('Helvetica').text(value, margin + 50, y, { width: contentWidth - 50 });
+    };
 
-    pdf
-      .font('Helvetica-Bold')
-      .text('Fecha:', margin, yPosition + 12)
-      .font('Helvetica')
-      .text(
-        new Date(factura.fecha).toLocaleDateString('es-BO', {
-          day: '2-digit',
-          month: '2-digit',
-          year: 'numeric'
-        }) + ' ' + new Date(factura.fecha).toLocaleTimeString('es-BO', {
-          hour: '2-digit',
-          minute: '2-digit'
-        }),
-        margin + 50,
-        yPosition + 12,
-        { width: contentWidth - 50 }
-      );
+    printField('Factura:', factura.codigo || 'S/N', yStart);
+    
+    // Formateo de Fecha
+    const fechaObj = new Date(factura.fecha);
+    const fechaStr = fechaObj.toLocaleDateString('es-BO') + ' ' + fechaObj.toLocaleTimeString('es-BO', {hour: '2-digit', minute:'2-digit'});
+    printField('Fecha:', fechaStr, yStart + 12);
 
-    pdf
-      .font('Helvetica-Bold')
-      .text('Cliente:', margin, yPosition + 24)
-      .font('Helvetica')
-      .text(
-        `${cliente.nombre} ${cliente.apellido}`,
-        margin + 50,
-        yPosition + 24,
-        { width: contentWidth - 50 }
-      );
-
-    pdf
-      .font('Helvetica-Bold')
-      .text('CI:', margin, yPosition + 36)
-      .font('Helvetica')
-      .text(cliente.ci?.toString() || 'N/A', margin + 50, yPosition + 36);
-
-    pdf
-      .font('Helvetica-Bold')
-      .text('Vendedor:', margin, yPosition + 48)
-      .font('Helvetica')
-      .text(
-        `${vendedor.nombre} ${vendedor.apellido}`,
-        margin + 50,
-        yPosition + 48,
-        { width: contentWidth - 50 }
-      )
+    printField('Cliente:', `${cliente.nombre} ${cliente.apellido}`, yStart + 24);
+    printField('CI/NIT:', cliente.ci?.toString() || '0', yStart + 36);
+    printField('Vendedor:', `${vendedor.nombre} ${vendedor.apellido}`, yStart + 48);
 
     pdf.moveDown(2);
-
-    pdf
-      .strokeColor('#2563eb')
-      .lineWidth(1.5)
-      .moveTo(margin, pdf.y)
-      .lineTo(pageWidth - margin, pdf.y)
-      .stroke();
-
+    
+    // Línea separadora
+    pdf.strokeColor('#2563eb').lineWidth(1.5)
+       .moveTo(margin, pdf.y).lineTo(pageWidth - margin, pdf.y).stroke();
     pdf.moveDown(0.5);
 
+    // --- TABLA DE PRODUCTOS ---
     const tableTop = pdf.y;
     
-    pdf
-      .fontSize(7)
-      .fillColor('#fff')
-      .rect(margin, tableTop, contentWidth, 18)
-      .fill('#414243');
+    // Encabezado Tabla (Fondo oscuro)
+    pdf.fontSize(7).fillColor('#fff')
+       .rect(margin, tableTop, contentWidth, 18).fill('#414243');
 
-    const col1Width = contentWidth * 0.40;
-    const col2Width = contentWidth * 0.15;
-    const col3Width = contentWidth * 0.22;
-    const col4Width = contentWidth * 0.23;
+    // Columnas (Anchos ajustados)
+    const col1 = contentWidth * 0.45; // Producto
+    const col2 = contentWidth * 0.15; // Cant
+    const col3 = contentWidth * 0.20; // P.Unit
+    const col4 = contentWidth * 0.20; // Subtotal
 
-    pdf
-      .fillColor('#fff')
-      .font('Helvetica-Bold')
-      .text('Producto', margin + 3, tableTop + 5, { width: col1Width - 3 })
-      .text('Cant.', margin + col1Width, tableTop + 5, { 
-        width: col2Width, 
-        align: 'center' 
-      })
-      .text('P. Unit.', margin + col1Width + col2Width, tableTop + 5, { 
-        width: col3Width, 
-        align: 'right' 
-      })
-      .text('Subtotal', margin + col1Width + col2Width + col3Width, tableTop + 5, { 
-        width: col4Width - 3, 
-        align: 'right' 
-      });
+    const rowY = tableTop + 5;
+    pdf.fillColor('#fff').font('Helvetica-Bold');
+    pdf.text('Producto', margin + 3, rowY, { width: col1 - 3 });
+    pdf.text('Cant.', margin + col1, rowY, { width: col2, align: 'center' });
+    pdf.text('P. Unit.', margin + col1 + col2, rowY, { width: col3, align: 'right' });
+    pdf.text('Subtotal', margin + col1 + col2 + col3, rowY, { width: col4 - 3, align: 'right' });
 
     let yPos = tableTop + 23;
 
+    // Filas
     productosValidos.forEach((producto, index) => {
-      if (yPos > pageHeight - 100) {
+      // Salto de página si se acaba el espacio
+      if (yPos > pageHeight - 50) {
         pdf.addPage();
         yPos = margin;
-
-        pdf
-          .fontSize(7)
-          .fillColor('#fff')
-          .rect(margin, yPos, contentWidth, 18)
-          .fill('#2563eb');
-
-        pdf
-          .fillColor('#fff')
-          .font('Helvetica-Bold')
-          .text('Producto', margin + 3, yPos + 5, { width: col1Width - 3 })
-          .text('Cant.', margin + col1Width, yPos + 5, { 
-            width: col2Width, 
-            align: 'center' 
-          })
-          .text('P. Unit.', margin + col1Width + col2Width, yPos + 5, { 
-            width: col3Width, 
-            align: 'right' 
-          })
-          .text('Subtotal', margin + col1Width + col2Width + col3Width, yPos + 5, { 
-            width: col4Width - 3, 
-            align: 'right' 
-          });
-
-        yPos += 23;
+        // Re-dibujar encabezado en nueva página (opcional, aquí simplificado)
       }
 
+      // Color alternado (cebra)
       if (index % 2 === 0) {
-        pdf
-          .fillColor('#f9fafb')
-          .rect(margin, yPos - 3, contentWidth, 18)
-          .fill();
+        pdf.fillColor('#f9fafb').rect(margin, yPos - 3, contentWidth, 18).fill();
       }
 
-      pdf
-        .fontSize(7)
-        .fillColor('#333')
-        .font('Helvetica')
-        .text(producto.nombre, margin + 3, yPos, { 
-          width: col1Width - 6,
-          ellipsis: true
-        })
-        .text(producto.cantidad.toString(), margin + col1Width, yPos, { 
-          width: col2Width, 
-          align: 'center' 
-        })
-        .text(
-          `${producto.precio_venta.toFixed(2)}`, 
-          margin + col1Width + col2Width, 
-          yPos, 
-          { width: col3Width, align: 'right' }
-        )
-        .text(
-          `${producto.subtotal.toFixed(2)}`, 
-          margin + col1Width + col2Width + col3Width, 
-          yPos, 
-          { width: col4Width - 3, align: 'right' }
-        );
+      pdf.fontSize(7).fillColor('#333').font('Helvetica');
+      
+      // Nombre (con truncado si es muy largo)
+      pdf.text(producto.nombre, margin + 3, yPos, { width: col1 - 6, ellipsis: true });
+      
+      // Cantidad
+      pdf.text(producto.cantidad.toString(), margin + col1, yPos, { width: col2, align: 'center' });
+      
+      // Precio Unitario (Ahora usa el histórico)
+      pdf.text(producto.precio_venta.toFixed(2), margin + col1 + col2, yPos, { width: col3, align: 'right' });
+      
+      // Subtotal
+      pdf.text(producto.subtotal.toFixed(2), margin + col1 + col2 + col3, yPos, { width: col4 - 3, align: 'right' });
 
-      yPos += 20;
+      yPos += 18;
     });
 
+    // --- TOTALES ---
     yPos += 5;
-    pdf
-      .strokeColor('#ddd')
-      .lineWidth(0.5)
-      .moveTo(margin, yPos)
-      .lineTo(pageWidth - margin, yPos)
-      .stroke();
+    pdf.strokeColor('#ddd').lineWidth(0.5)
+       .moveTo(margin, yPos).lineTo(pageWidth - margin, yPos).stroke();
 
     yPos += 10;
+    
+    pdf.fontSize(10).font('Helvetica-Bold').fillColor('#050b16');
+    pdf.text('TOTAL:', margin + col1 + col2, yPos, { width: col3, align: 'right' });
+    
+    pdf.fontSize(11)
+       .text(`Bs. ${totalVenta.toFixed(2)}`, margin + col1 + col2 + col3, yPos, { width: col4 - 3, align: 'right' });
 
-    pdf
-      .fontSize(10)
-      .font('Helvetica-Bold')
-      .fillColor('#050b16')
-      .text('TOTAL:', margin + col1Width + col2Width, yPos)
-      .fontSize(11)
-      .text(
-        `Bs. ${totalVenta.toFixed(2)}`, 
-        margin + col1Width + col2Width + col3Width, 
-        yPos, 
-        { width: col4Width - 3, align: 'right' }
-      );
-
-    const footerY = pageHeight - 35;
-
-    pdf
-      .fontSize(6)
-      .fillColor('#666')
-      .font('Helvetica-Oblique')
-      .text(
-        'Gracias por su compra',
-        margin,
-        footerY,
-        { align: 'center', width: contentWidth }
-      )
+    // --- PIE DE PÁGINA ---
+    pdf.fontSize(6).fillColor('#666').font('Helvetica-Oblique')
+       .text('Gracias por su preferencia', margin, pageHeight - 30, { align: 'center', width: contentWidth });
 
     pdf.end();
 
   } catch (error) {
-    console.error('Error al generar PDF:', error);
-    
-    if (!res.headersSent) {
-      return res.status(500).json({
-        message: 'Error al generar PDF',
-        error: error.message
-      });
-    }
+    console.error('Error generando PDF:', error);
+    if (!res.headersSent) res.status(500).json({ error: 'Error al generar el PDF' });
   }
 };
 

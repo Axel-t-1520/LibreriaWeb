@@ -1,74 +1,50 @@
 import { supabase } from "../config/db.js";
 
+// ==========================================
+// 1. VENTAS DEL DÍA (CORREGIDO)
+// ==========================================
 export const ventasTotal = async (req, res) => {
   try {
-    // ============================================
-    // OBTENER FECHA ACTUAL (inicio y fin del día)
-    // ============================================
     const hoy = new Date();
-    
-    // Inicio del día: 00:00:00
     const inicioDia = new Date(hoy);
     inicioDia.setHours(0, 0, 0, 0);
-    
-    // Fin del día: 23:59:59
     const finDia = new Date(hoy);
     finDia.setHours(23, 59, 59, 999);
 
-    // ============================================
-    // CONSULTAR VENTAS DEL DÍA
-    // ============================================
     const { data, error } = await supabase
       .from('Factura')
       .select(`
-        id,
-        codigo,
-        fecha,
+        id, codigo, fecha,
         Cliente(nombre, apellido),
         Vendedor(nombre, apellido)
       `)
-      .gte('fecha', inicioDia.toISOString())  // Mayor o igual a 00:00:00
-      .lte('fecha', finDia.toISOString())     // Menor o igual a 23:59:59
-      .order('fecha', { ascending: false });  // Más reciente primero
+      .gte('fecha', inicioDia.toISOString())
+      .lte('fecha', finDia.toISOString())
+      .order('fecha', { ascending: false });
 
-    if (error) {
-      console.error('Error al obtener ventas:', error);
-      return res.status(500).json({
-        message: "Error al obtener las ventas del día",
-        error: error.message
-      });
-    }
+    if (error) throw error;
 
-    // ============================================
-    // CALCULAR ESTADÍSTICAS
-    // ============================================
     const totalVentas = data.length;
-
-    // Calcular monto total (si tienes Detalle_Factura)
     let montoTotal = 0;
     
     if (totalVentas > 0) {
-      // Obtener detalles para calcular totales
       const facturasIds = data.map(f => f.id);
       
+      // CAMBIO: Pedimos precio_unitario directo de Detalle_Factura
       const { data: detalles } = await supabase
         .from('Detalle_Factura')
-        .select(`
-          cantidad,
-          Producto(precio_venta)
-        `)
+        .select(`cantidad, precio_unitario`) 
         .in('id_factura', facturasIds);
 
       if (detalles) {
         montoTotal = detalles.reduce((total, detalle) => {
-          return total + (detalle.cantidad * detalle.Producto.precio_venta);
+          // CAMBIO: Usamos el precio histórico (con fallback a 0 por seguridad)
+          const precio = detalle.precio_unitario || 0;
+          return total + (detalle.cantidad * precio);
         }, 0);
       }
     }
 
-    // ============================================
-    // RESPUESTA
-    // ============================================
     return res.status(200).json({
       message: `Ventas del día ${hoy.toLocaleDateString('es-BO')}`,
       fecha: hoy.toISOString(),
@@ -80,115 +56,100 @@ export const ventasTotal = async (req, res) => {
       ventas: data.map(venta => ({
         codigo: venta.codigo,
         fecha: venta.fecha,
-        cliente: venta.Cliente ? 
-          `${venta.Cliente.nombre} ${venta.Cliente.apellido}` : 
-          'N/A',
-        vendedor: venta.Vendedor ? 
-          `${venta.Vendedor.nombre} ${venta.Vendedor.apellido}` : 
-          'N/A'
+        cliente: venta.Cliente ? `${venta.Cliente.nombre} ${venta.Cliente.apellido}` : 'N/A',
+        vendedor: venta.Vendedor ? `${venta.Vendedor.nombre} ${venta.Vendedor.apellido}` : 'N/A'
       }))
     });
 
   } catch (error) {
-    console.error('Error del servidor:', error);
-    return res.status(500).json({
-      message: 'Error del servidor',
-      error: error.message
-    });
+    console.error('Error:', error);
+    return res.status(500).json({ message: 'Error del servidor', error: error.message });
   }
 };
 
+// ==========================================
+// 2. VENTAS ÚLTIMOS 7 DÍAS (CORREGIDO)
+// ==========================================
 export const ventasUltimos7Dias = async (req, res) => {
   try {
     const hoy = new Date();
     const hace7Dias = new Date();
     hace7Dias.setDate(hoy.getDate() - 7);
 
+    // CAMBIO: Pedimos precio_unitario en lugar de Producto(precio_venta)
     const { data: facturas, error } = await supabase
       .from('Factura')
       .select(`
         fecha,
-        Detalle_Factura(cantidad, Producto(precio_venta))
+        Detalle_Factura(cantidad, precio_unitario) 
       `)
       .gte('fecha', hace7Dias.toISOString())
       .lte('fecha', hoy.toISOString());
 
-    if (error) {
-      return res.status(500).json({
-        message: 'Error al obtener ventas',
-        error: error.message
-      });
-    }
+    if (error) throw error;
 
-    // Agrupar por día
     const ventasPorDia = {};
 
     facturas.forEach(factura => {
-      const fecha = factura.fecha.split('T')[0]; // "2026-01-20"
+      const fecha = factura.fecha.split('T')[0];
       
       if (!ventasPorDia[fecha]) {
-        ventasPorDia[fecha] = {
-          fecha: fecha,
-          total_ventas: 0,
-          monto_total: 0
-        };
+        ventasPorDia[fecha] = { fecha: fecha, total_ventas: 0, monto_total: 0 };
       }
 
       ventasPorDia[fecha].total_ventas++;
       
-      factura.Detalle_Factura.forEach(detalle => {
-        ventasPorDia[fecha].monto_total += 
-          detalle.cantidad * detalle.Producto.precio_venta;
-      });
+      if(factura.Detalle_Factura) {
+        factura.Detalle_Factura.forEach(detalle => {
+          // CAMBIO: Cálculo con precio histórico
+          const precio = detalle.precio_unitario || 0;
+          ventasPorDia[fecha].monto_total += detalle.cantidad * precio;
+        });
+      }
     });
 
-    // Convertir a array y ordenar
     const resultado = Object.values(ventasPorDia)
       .sort((a, b) => new Date(a.fecha) - new Date(b.fecha));
 
-    return res.status(200).json({
-      message: 'Ventas de los últimos 7 días',
-      datos: resultado
-    });
+    return res.status(200).json({ message: 'Ventas 7 días', datos: resultado });
 
   } catch (error) {
-    return res.status(500).json({
-      message: 'Error del servidor',
-      error: error.message
-    });
+    return res.status(500).json({ message: 'Error del servidor', error: error.message });
   }
 };
 
+// ==========================================
+// 3. VENTAS MES ACTUAL (CORREGIDO)
+// ==========================================
 export const ventasMesActual = async (req, res) => {
   try {
     const hoy = new Date();
     const primerDiaMes = new Date(hoy.getFullYear(), hoy.getMonth(), 1);
     const ultimoDiaMes = new Date(hoy.getFullYear(), hoy.getMonth() + 1, 0, 23, 59, 59);
 
+    // CAMBIO: Pedimos precio_unitario
     const { data: facturas, error } = await supabase
       .from('Factura')
       .select(`
         id,
-        Detalle_Factura(cantidad, Producto(precio_venta))
+        Detalle_Factura(cantidad, precio_unitario)
       `)
       .gte('fecha', primerDiaMes.toISOString())
       .lte('fecha', ultimoDiaMes.toISOString());
 
-    if (error) {
-      return res.status(500).json({
-        message: 'Error al obtener ventas',
-        error: error.message
-      });
-    }
+    if (error) throw error;
 
-    // Calcular totales
     const totalVentas = facturas.length;
     let montoTotal = 0;
 
     facturas.forEach(factura => {
-      factura.Detalle_Factura.forEach(detalle => {
-        montoTotal += detalle.cantidad * detalle.Producto.precio_venta;
-      });
+      if(factura.Detalle_Factura) {
+        factura.Detalle_Factura.forEach(detalle => {
+          // CAMBIO: Cálculo con precio histórico
+          const precio = detalle.precio_unitario || 0;
+          montoTotal += detalle.cantidad * precio;
+        });
+      }
     });
 
     return res.status(200).json({
@@ -199,59 +160,55 @@ export const ventasMesActual = async (req, res) => {
     });
 
   } catch (error) {
-    return res.status(500).json({
-      message: 'Error del servidor',
-      error: error.message
-    });
+    return res.status(500).json({ message: 'Error del servidor', error: error.message });
   }
 };
 
+// ==========================================
+// 4. COMPARACIÓN HOY VS AYER (CORREGIDO)
+// ==========================================
 export const ventasHoyVsAyer = async (req, res) => {
   try {
-    // HOY
     const hoy = new Date();
     const inicioHoy = new Date(hoy.setHours(0, 0, 0, 0));
     const finHoy = new Date(hoy.setHours(23, 59, 59, 999));
 
-    // AYER
     const ayer = new Date();
     ayer.setDate(ayer.getDate() - 1);
     const inicioAyer = new Date(ayer.setHours(0, 0, 0, 0));
     const finAyer = new Date(ayer.setHours(23, 59, 59, 999));
 
-    // Ventas de hoy
+    // CAMBIO: Pedimos precio_unitario en ambas consultas
     const { data: facturasHoy } = await supabase
       .from('Factura')
-      .select(`Detalle_Factura(cantidad, Producto(precio_venta))`)
+      .select(`Detalle_Factura(cantidad, precio_unitario)`)
       .gte('fecha', inicioHoy.toISOString())
       .lte('fecha', finHoy.toISOString());
 
-    // Ventas de ayer
     const { data: facturasAyer } = await supabase
       .from('Factura')
-      .select(`Detalle_Factura(cantidad, Producto(precio_venta))`)
+      .select(`Detalle_Factura(cantidad, precio_unitario)`)
       .gte('fecha', inicioAyer.toISOString())
       .lte('fecha', finAyer.toISOString());
 
-    // Calcular totales HOY
+    // Totales HOY
     const ventasHoy = facturasHoy.length;
     let montoHoy = 0;
     facturasHoy.forEach(f => {
       f.Detalle_Factura.forEach(d => {
-        montoHoy += d.cantidad * d.Producto.precio_venta;
+        montoHoy += d.cantidad * (d.precio_unitario || 0);
       });
     });
 
-    // Calcular totales AYER
+    // Totales AYER
     const ventasAyer = facturasAyer.length;
     let montoAyer = 0;
     facturasAyer.forEach(f => {
       f.Detalle_Factura.forEach(d => {
-        montoAyer += d.cantidad * d.Producto.precio_venta;
+        montoAyer += d.cantidad * (d.precio_unitario || 0);
       });
     });
 
-    // Comparación
     const diferenciaVentas = ventasHoy - ventasAyer;
     const diferenciaMonto = montoHoy - montoAyer;
     const porcentajeVentas = ventasAyer > 0 
@@ -259,14 +216,8 @@ export const ventasHoyVsAyer = async (req, res) => {
       : 0;
 
     return res.status(200).json({
-      hoy: {
-        ventas: ventasHoy,
-        monto: montoHoy
-      },
-      ayer: {
-        ventas: ventasAyer,
-        monto: montoAyer
-      },
+      hoy: { ventas: ventasHoy, monto: montoHoy },
+      ayer: { ventas: ventasAyer, monto: montoAyer },
       comparacion: {
         diferencia_ventas: diferenciaVentas,
         diferencia_monto: diferenciaMonto,
@@ -276,9 +227,6 @@ export const ventasHoyVsAyer = async (req, res) => {
     });
 
   } catch (error) {
-    return res.status(500).json({
-      message: 'Error del servidor',
-      error: error.message
-    });
+    return res.status(500).json({ message: 'Error del servidor', error: error.message });
   }
 };
