@@ -223,42 +223,40 @@ export const logoutVendedor = async (req, res) => {
 // Obtener vendedor actual (requiere token)
 export const getVendedorActual = async (req, res) => {
   try {
-    // Obtener usuario autenticado
-    const {
-      data: { user },
-      error: authError,
-    } = await supabase.auth.getUser();
+    // 1. NO llames a supabase.auth.getUser() aquí.
+    // El middleware 'verificarToken' ya lo hizo y guardó el usuario en req.user
+    const user = req.user; 
 
-    if (authError || !user) {
-      return res.status(401).json({
-        message: "No autenticado",
-      });
+    if (!user) {
+      return res.status(401).json({ message: "Usuario no identificado en el request" });
     }
 
-    // Obtener datos del vendedor
+    // 2. Obtener datos de la tabla Vendedor usando el ID del usuario autenticado
     const { data: vendedor, error: vendedorError } = await supabase
       .from("Vendedor")
       .select("*")
       .eq("auth_id", user.id)
       .single();
 
-    if (vendedorError) {
+    if (vendedorError || !vendedor) {
       return res.status(404).json({
-        message: "Vendedor no encontrado",
+        message: "Perfil de vendedor no encontrado",
       });
     }
 
-    return res.status(200).json({
-      vendedor: vendedor,
-    });
+    // 3. IMPORTANTE: Devolver el objeto directo
+    // Si devuelves { vendedor: vendedor }, en el frontend tendrás data.vendedor
+    // Si tu AuthContext hace setVendedor(data), es mejor devolver el objeto limpio:
+    return res.status(200).json(vendedor); 
+
   } catch (error) {
+    console.error("Error en getVendedorActual:", error);
     return res.status(500).json({
       message: "Error del servidor",
       error: error.message,
     });
   }
 };
-
 // Cambiar contraseña
 export const cambiarPassword = async (req, res) => {
   try {
