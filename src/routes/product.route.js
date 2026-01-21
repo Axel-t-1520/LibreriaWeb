@@ -4,6 +4,7 @@ import {
   getProd,
   getProductCat,
   getProductId,
+  productTotal,
   registerProduct,
   updateProd,
  
@@ -18,5 +19,6 @@ router.get("/product/:id", getProductId);
 router.post("/regisProd",upload.single('imagen'), registerProduct);
 router.put('/product/update/:id', updateProd)
 router.delete('/product/delete/:id',deleteProd)
+router.get('/productosTotal',productTotal)
 
 export default router;

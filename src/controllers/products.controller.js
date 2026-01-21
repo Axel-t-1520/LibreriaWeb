@@ -339,3 +339,17 @@ export const deleteProd = async (req, res) => {
     });
   }
 };
+
+
+export const productTotal = async (req,res)=>{
+  const {data,error} = await supabase
+  .from("Producto")
+  .select('*')
+
+  if (error){
+    return res.status(404).json({
+      message:"no se pudo contar los productos"
+    })
+  }
+  return res.status(200).json({total:data.length})
+}
