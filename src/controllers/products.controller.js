@@ -302,44 +302,111 @@ export const deleteProd = async (req, res) => {
   try {
     const { id } = req.params;
     
-    // Primero verificar si existe
-    const { data: existe } = await supabase
+    // ============================================
+    // PASO 1: Verificar que el producto existe y obtener su imagen
+    // ============================================
+    const { data: producto, error: errorProducto } = await supabase
       .from("Producto")
-      .select("id, nombre")
+      .select("id, codigo, nombre, imagen_url")
       .eq("id", parseInt(id))
       .single();
 
-    if (!existe) {
+    if (errorProducto || !producto) {
       return res.status(404).json({
         message: `No se encontró el producto con id ${id}`
       });
     }
 
-    // Eliminar el producto
-    const { error } = await supabase
+    // ============================================
+    // PASO 2: Verificar si el producto está en facturas
+    // ============================================
+    const { data: detallesFactura, error: errorDetalles } = await supabase
+      .from("Detalle_Factura")
+      .select("id")
+      .eq("id_producto", parseInt(id))
+      .limit(1);
+
+    if (errorDetalles) {
+      return res.status(500).json({
+        message: "Error al verificar facturas",
+        error: errorDetalles.message
+      });
+    }
+
+    if (detallesFactura && detallesFactura.length > 0) {
+      return res.status(409).json({
+        message: `No se puede eliminar el producto "${producto.nombre}" porque está asociado a facturas existentes`,
+        sugerencia: "Considera desactivar el producto en lugar de eliminarlo"
+      });
+    }
+
+    // ============================================
+    // PASO 3: Eliminar imagen del Storage SI existe
+    // ============================================
+    if (producto.imagen_url) {
+      console.log('🖼️ Producto tiene imagen, eliminando del Storage...');
+      
+      try {
+        // Extraer el nombre del archivo de la URL
+        // Ejemplo URL: https://proyecto.supabase.co/storage/v1/object/public/productos/abc-123.jpg
+        const urlParts = producto.imagen_url.split('/');
+        const fileName = urlParts[urlParts.length - 1]; // "abc-123.jpg"
+        const filePath = `productos/${fileName}`;
+
+        const { error: storageError } = await supabase.storage
+          .from('productos')
+          .remove([filePath]);
+
+        if (storageError) {
+          console.error('⚠️ Error al eliminar imagen del Storage:', storageError);
+          // No detenemos el proceso, continuamos eliminando el producto
+        } else {
+          console.log('✅ Imagen eliminada del Storage:', fileName);
+        }
+      } catch (storageErr) {
+        console.error('⚠️ Error al procesar eliminación de imagen:', storageErr);
+        // Continuamos de todos modos
+      }
+    } else {
+      console.log('ℹ️ Producto sin imagen, continuando...');
+    }
+
+    // ============================================
+    // PASO 4: Eliminar el producto de la base de datos
+    // ============================================
+    const { error: deleteError } = await supabase
       .from("Producto")
       .delete()
       .eq("id", parseInt(id));
 
-    if (error) {
+    if (deleteError) {
       return res.status(500).json({
-        message: "No se pudo eliminar el producto",
-        error: error.message
+        message: "No se pudo eliminar el producto de la base de datos",
+        error: deleteError.message
       });
     }
 
+    // ============================================
+    // PASO 5: Respuesta exitosa
+    // ============================================
     return res.status(200).json({
-      message: `Se eliminó exitosamente el producto: ${existe.nombre}`
+      message: `Producto "${producto.nombre}" (${producto.codigo}) eliminado exitosamente`,
+      imagen_eliminada: producto.imagen_url ? true : false,
+      producto: {
+        id: producto.id,
+        nombre: producto.nombre,
+        codigo: producto.codigo
+      }
     });
 
   } catch (err) {
+    console.error('❌ Error del servidor:', err);
     return res.status(500).json({
       message: "Error del servidor",
       error: err.message
     });
   }
 };
-
 
 export const productTotal = async (req,res)=>{
   const {data,error} = await supabase
